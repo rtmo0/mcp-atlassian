@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
+use crate::cache::{MetadataCache, PageCache};
 use crate::config::{AtlassianConfig, Config};
 use crate::model::{ApiError, Product};
 
@@ -27,6 +28,7 @@ pub struct AtlassianClient {
     product: Product,
     retry_max: usize,
     api_prefix: &'static str,
+    metadata_cache: Option<MetadataCache>,
 }
 
 impl AtlassianClient {
@@ -57,7 +59,50 @@ impl AtlassianClient {
             } else {
                 ""
             },
+            metadata_cache: None,
         }
+    }
+
+    pub fn with_metadata_cache(mut self, cache: Option<MetadataCache>) -> Self {
+        self.metadata_cache = cache;
+        self
+    }
+
+    /// GET slow-changing reference data through the metadata TTL cache.
+    /// Errors are never cached. Without a cache this is a plain `get_json`.
+    pub async fn get_json_cached(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> anyhow::Result<Value> {
+        self.get_json_cached_inner(path, query, false).await
+    }
+
+    /// Like [`Self::get_json_cached`], but always fetches and refreshes the entry.
+    pub async fn get_json_refresh(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> anyhow::Result<Value> {
+        self.get_json_cached_inner(path, query, true).await
+    }
+
+    async fn get_json_cached_inner(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        refresh: bool,
+    ) -> anyhow::Result<Value> {
+        let Some(cache) = &self.metadata_cache else {
+            return self.get_json(path, query).await;
+        };
+        let key = MetadataCache::key(path, query);
+        if !refresh && let Some(value) = cache.get(&key).await {
+            return Ok((*value).clone());
+        }
+        let value = self.get_json(path, query).await?;
+        cache.insert(key, Arc::new(value.clone())).await;
+        Ok(value)
     }
 
     pub fn base_url(&self) -> &str {
@@ -348,6 +393,7 @@ impl Providers {
                 cfg.retry_max,
                 cfg.jira_projects_filter.clone(),
             )
+            .with_metadata_cache(MetadataCache::new(cfg.metadata_cache_ttl))
         });
         let confluence = cfg.confluence.as_ref().map(|confluence| {
             ConfluenceClient::new(
@@ -356,6 +402,7 @@ impl Providers {
                 cfg.retry_max,
                 cfg.confluence_spaces_filter.clone(),
             )
+            .with_page_cache(PageCache::new(cfg.page_cache_bytes))
         });
 
         Ok(Self {

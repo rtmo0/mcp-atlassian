@@ -4,12 +4,22 @@ use crate::model::value_str;
 use crate::providers::jira::JiraClient;
 
 impl JiraClient {
-    pub async fn get_fields(&self) -> anyhow::Result<Value> {
-        self.client.get_json("rest/api/3/field", &[]).await
+    /// All Jira fields, served from the metadata cache unless `refresh` is set.
+    pub async fn get_fields(&self, refresh: bool) -> anyhow::Result<Value> {
+        if refresh {
+            self.client.get_json_refresh("rest/api/3/field", &[]).await
+        } else {
+            self.client.get_json_cached("rest/api/3/field", &[]).await
+        }
     }
 
-    pub async fn search_fields(&self, keyword: &str, limit: usize) -> anyhow::Result<Value> {
-        let fields = self.get_fields().await?;
+    pub async fn search_fields(
+        &self,
+        keyword: &str,
+        limit: usize,
+        refresh: bool,
+    ) -> anyhow::Result<Value> {
+        let fields = self.get_fields(refresh).await?;
         let fields = fields.as_array().cloned().unwrap_or_default();
         if keyword.trim().is_empty() {
             return Ok(Value::Array(
@@ -68,7 +78,7 @@ impl JiraClient {
         loop {
             let response = self
                 .client
-                .get_json(
+                .get_json_cached(
                     &format!("rest/api/3/field/{field_id}/context/{context_id}/option"),
                     &[
                         ("startAt", start_at.to_string()),
@@ -138,7 +148,7 @@ impl JiraClient {
     async fn resolve_field_context(&self, field_id: &str) -> anyhow::Result<String> {
         let response = self
             .client
-            .get_json(&format!("rest/api/3/field/{field_id}/context"), &[])
+            .get_json_cached(&format!("rest/api/3/field/{field_id}/context"), &[])
             .await?;
         let contexts = response
             .get("values")
@@ -219,4 +229,46 @@ fn option_matches(option: &Value, needle: &str) -> bool {
         .get("child_options")
         .and_then(Value::as_array)
         .is_some_and(|children| children.iter().any(|child| option_matches(child, needle)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::cache::MetadataCache;
+    use crate::config::AtlassianConfig;
+    use crate::providers::jira::JiraClient;
+
+    #[tokio::test]
+    async fn field_list_is_cached_and_refresh_bypasses_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/3/field"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"id": "summary", "key": "summary", "name": "Summary"},
+                {"id": "customfield_10010", "key": "customfield_10010", "name": "Story Points"}
+            ])))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let config = AtlassianConfig {
+            base_url: server.uri(),
+            username: Some("user".to_string()),
+            token: "token".to_string(),
+        };
+        let jira = JiraClient::new(&config, reqwest::Client::new(), 0, Vec::new())
+            .with_metadata_cache(MetadataCache::new(Duration::from_secs(60)));
+
+        let first = jira.search_fields("story", 10, false).await.unwrap();
+        assert_eq!(first[0]["id"], "customfield_10010");
+        jira.search_fields("summary", 10, false).await.unwrap();
+        // `refresh=true` forces a second request and updates the cached list.
+        jira.search_fields("", 10, true).await.unwrap();
+        jira.search_fields("", 10, false).await.unwrap();
+    }
 }

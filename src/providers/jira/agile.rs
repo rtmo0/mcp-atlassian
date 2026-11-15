@@ -25,7 +25,10 @@ impl JiraClient {
         if let Some(kind) = board_type.filter(|v| !v.is_empty()) {
             query.push(("type", kind.to_string()));
         }
-        let response = self.client.get_json("rest/agile/1.0/board", &query).await?;
+        let response = self
+            .client
+            .get_json_cached("rest/agile/1.0/board", &query)
+            .await?;
         let boards = response
             .get("values")
             .and_then(Value::as_array)

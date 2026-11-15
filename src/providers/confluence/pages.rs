@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use similar::TextDiff;
+
+use crate::cache::{PageKey, PageKind};
 
 use crate::markdown::storage_to_markdown;
 use crate::model::{value_str, value_u64};
@@ -8,11 +12,31 @@ use crate::providers::confluence::{ConfluenceClient, simplify_page};
 const PAGE_EXPAND: &str = "body.storage,version,space,history,ancestors,children.attachment";
 
 impl ConfluenceClient {
+    /// Fetch the current page.
+    ///
+    /// When `expected_version` is given (follow-up pagination chunks) and that
+    /// version is cached, only a lightweight version probe is sent; the cached
+    /// body is served if the page is still at that version. Otherwise the full
+    /// page is fetched, so the caller's "page changed" check stays authoritative.
     pub async fn get_page(
         &self,
         page_id: &str,
         convert_to_markdown: bool,
+        expected_version: Option<u64>,
     ) -> anyhow::Result<Value> {
+        let key = |version| PageKey {
+            page_id: page_id.to_string(),
+            version,
+            markdown: convert_to_markdown,
+            kind: PageKind::Current,
+        };
+        if let (Some(cache), Some(expected)) = (&self.page_cache, expected_version)
+            && let Some(cached) = cache.get(&key(expected)).await
+            && self.current_version(page_id).await? == Some(expected)
+        {
+            return Ok((*cached).clone());
+        }
+
         let page = self
             .client
             .get_json(
@@ -20,7 +44,7 @@ impl ConfluenceClient {
                 &[("expand", PAGE_EXPAND.to_string())],
             )
             .await?;
-        Ok(simplify_page(
+        let page = simplify_page(
             &page,
             self.base_url(),
             None,
@@ -29,7 +53,30 @@ impl ConfluenceClient {
             } else {
                 "storage"
             },
-        ))
+        );
+        self.cache_page(&page, key).await;
+        Ok(page)
+    }
+
+    /// Current version number of a page, without its body.
+    async fn current_version(&self, page_id: &str) -> anyhow::Result<Option<u64>> {
+        let page = self
+            .client
+            .get_json(
+                &format!("rest/api/content/{page_id}"),
+                &[("expand", "version".to_string())],
+            )
+            .await?;
+        Ok(page.pointer("/version/number").and_then(Value::as_u64))
+    }
+
+    async fn cache_page(&self, page: &Value, key: impl FnOnce(u64) -> PageKey) {
+        if let (Some(cache), Some(version)) = (
+            &self.page_cache,
+            page.get("version").and_then(Value::as_u64),
+        ) {
+            cache.insert(key(version), Arc::new(page.clone())).await;
+        }
     }
 
     pub async fn get_page_by_title(
@@ -259,6 +306,19 @@ impl ConfluenceClient {
         version: u32,
         convert_to_markdown: bool,
     ) -> anyhow::Result<Value> {
+        // A historical version is immutable: a cache hit needs no revalidation.
+        let key = PageKey {
+            page_id: page_id.to_string(),
+            version: u64::from(version),
+            markdown: convert_to_markdown,
+            kind: PageKind::Historical,
+        };
+        if let Some(cache) = &self.page_cache
+            && let Some(cached) = cache.get(&key).await
+        {
+            return Ok((*cached).clone());
+        }
+
         let page = self
             .client
             .get_json(
@@ -273,7 +333,7 @@ impl ConfluenceClient {
                 ],
             )
             .await?;
-        Ok(simplify_page(
+        let page = simplify_page(
             &page,
             self.base_url(),
             None,
@@ -282,7 +342,11 @@ impl ConfluenceClient {
             } else {
                 "storage"
             },
-        ))
+        );
+        if let Some(cache) = &self.page_cache {
+            cache.insert(key, Arc::new(page.clone())).await;
+        }
+        Ok(page)
     }
 
     pub async fn get_page_diff(
@@ -355,12 +419,131 @@ impl ConfluenceClient {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-    use wiremock::matchers::{header, method, path};
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::PAGE_EXPAND;
+    use crate::cache::{PageCache, PageKey, PageKind};
     use crate::config::AtlassianConfig;
     use crate::providers::confluence::ConfluenceClient;
+
+    fn page_body(version: u64, text: &str) -> Value {
+        json!({
+            "id": "123",
+            "type": "page",
+            "status": "current",
+            "title": "Test page",
+            "space": {"key": "SPC", "name": "Space"},
+            "version": {"number": version, "when": "2026-01-01T00:00:00Z"},
+            "body": {"storage": {"value": format!("<p>{text}</p>")}},
+            "children": {"attachment": {"results": []}},
+            "_links": {"webui": "/spaces/SPC/pages/123"}
+        })
+    }
+
+    fn cached_client(server: &MockServer) -> ConfluenceClient {
+        let config = AtlassianConfig {
+            base_url: server.uri(),
+            username: Some("user".to_string()),
+            token: "token".to_string(),
+        };
+        ConfluenceClient::new(&config, reqwest::Client::new(), 0, Vec::new())
+            .with_page_cache(PageCache::new(16 * 1024 * 1024))
+    }
+
+    #[tokio::test]
+    async fn follow_up_chunks_are_served_from_cache_after_version_probe() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/123"))
+            .and(query_param("expand", PAGE_EXPAND))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page_body(3, "body")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/123"))
+            .and(query_param("expand", "version"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id": "123", "version": {"number": 3}})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let client = cached_client(&server);
+        let first = client.get_page("123", true, None).await.unwrap();
+        for _ in 0..2 {
+            let next = client.get_page("123", true, Some(3)).await.unwrap();
+            assert_eq!(next, first);
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_page_bypasses_cache_and_reports_new_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/123"))
+            .and(query_param("expand", "version"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id": "123", "version": {"number": 4}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/123"))
+            .and(query_param("expand", PAGE_EXPAND))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page_body(4, "new")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = cached_client(&server);
+        let stale = PageKey {
+            page_id: "123".into(),
+            version: 3,
+            markdown: true,
+            kind: PageKind::Current,
+        };
+        client
+            .page_cache
+            .as_ref()
+            .unwrap()
+            .insert(
+                stale,
+                Arc::new(json!({"version": 3, "content": {"value": "old"}})),
+            )
+            .await;
+
+        let page = client.get_page("123", true, Some(3)).await.unwrap();
+        // The caller sees version 4 and rejects the stale pagination session.
+        assert_eq!(page["version"], 4);
+        assert!(page["content"]["value"].as_str().unwrap().contains("new"));
+    }
+
+    #[tokio::test]
+    async fn historical_versions_are_fetched_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/123"))
+            .and(query_param("status", "historical"))
+            .and(query_param("version", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page_body(2, "v2")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = cached_client(&server);
+        let first = client.get_page_history("123", 2, true).await.unwrap();
+        let second = client.get_page_history("123", 2, true).await.unwrap();
+        assert_eq!(first, second);
+    }
 
     #[tokio::test]
     async fn get_page_uses_v1_api_and_converts_storage() {
@@ -397,7 +580,7 @@ mod tests {
             token: "token".to_string(),
         };
         let client = ConfluenceClient::new(&config, reqwest::Client::new(), 0, Vec::new());
-        let page = client.get_page("123", true).await.unwrap();
+        let page = client.get_page("123", true, None).await.unwrap();
         assert_eq!(page["title"], "Test page");
         assert_eq!(
             page["url"],

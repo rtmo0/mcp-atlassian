@@ -43,6 +43,11 @@ impl JiraClient {
         }
     }
 
+    pub fn with_metadata_cache(mut self, cache: Option<crate::cache::MetadataCache>) -> Self {
+        self.client = self.client.with_metadata_cache(cache);
+        self
+    }
+
     pub(crate) fn ensure_project_allowed(&self, project_key: &str) -> anyhow::Result<()> {
         if !self.projects_filter.is_empty()
             && !self

@@ -89,7 +89,7 @@ impl AtlassianMcpServer {
         Parameters(params): Parameters<JiraSearchFieldsParams>,
     ) -> Result<CallToolResult, McpError> {
         self.run_jira_json("jira_search_fields", |jira| async move {
-            jira.search_fields(&params.keyword, params.limit as usize)
+            jira.search_fields(&params.keyword, params.limit as usize, params.refresh)
                 .await
         })
         .await

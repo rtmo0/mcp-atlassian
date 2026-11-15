@@ -59,6 +59,10 @@ pub struct Config {
     pub jira_projects_filter: Vec<String>,
     pub confluence_spaces_filter: Vec<String>,
     pub read_only: bool,
+    /// TTL of the Jira metadata cache; zero disables it.
+    pub metadata_cache_ttl: Duration,
+    /// Memory budget of the Confluence page cache in bytes; zero disables it.
+    pub page_cache_bytes: u64,
 }
 
 impl Config {
@@ -92,6 +96,10 @@ impl Config {
             100 * 1024 * 1024usize,
         )?
         .max(max_attachment_bytes);
+        let metadata_cache_ttl =
+            Duration::from_secs(env_parse("ATLASSIAN_MCP_METADATA_CACHE_TTL_SECS", 300u64)?);
+        let page_cache_bytes =
+            env_parse("ATLASSIAN_MCP_PAGE_CACHE_MB", 64u64)?.saturating_mul(1024 * 1024);
 
         Ok(Self {
             jira,
@@ -106,6 +114,8 @@ impl Config {
             jira_projects_filter: parse_csv("JIRA_PROJECTS_FILTER"),
             confluence_spaces_filter: parse_csv("CONFLUENCE_SPACES_FILTER"),
             read_only,
+            metadata_cache_ttl,
+            page_cache_bytes,
         })
     }
 }

@@ -6,7 +6,7 @@ impl JiraClient {
     pub async fn get_link_types(&self, name_filter: Option<&str>) -> anyhow::Result<Value> {
         let response = self
             .client
-            .get_json("rest/api/3/issueLinkType", &[])
+            .get_json_cached("rest/api/3/issueLinkType", &[])
             .await?;
         let mut link_types: Vec<Value> = response
             .get("issueLinkTypes")

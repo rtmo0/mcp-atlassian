@@ -3,113 +3,50 @@
 [![CI](https://github.com/rtmo0/mcp-atlassian/actions/workflows/ci.yml/badge.svg)](https://github.com/rtmo0/mcp-atlassian/actions/workflows/ci.yml)
 
 Read-only [MCP](https://modelcontextprotocol.io) server for **Atlassian Cloud** (Jira and
-Confluence), written in Rust on top of the official MCP SDK
-[`rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
+Confluence). It is a single Rust binary with **two transports**:
 
-It ports the read-only toolset of
-[`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) 0.21.1
-(revision `4e2b836`) with the same tool names, parameters and defaults, and adds
-pagination for large Confluence page bodies. It ships as a single static binary.
+| Mode | Command | Use it when |
+|---|---|---|
+| **STDIO** | `atlassian-mcp stdio` | One user on a laptop. The MCP client (Codex, Claude Code, Cursor and others) starts the server as a child process and stops it when the session ends. No port or MCP token is needed. |
+| **HTTP** | `atlassian-mcp serve` | A shared or remote server. MCP is served as Streamable HTTP at `/mcp`, with token auth, health checks and Prometheus metrics. |
 
-## Features
+Both modes expose the same 43 tools and read Atlassian credentials from the same
+environment variables.
 
-- **43 read-only tools**: 29 for Jira and 14 for Confluence.
-- **Two transports** from the same binary:
-  - `atlassian-mcp stdio`: the MCP client starts the server as a child process. Use this
-    for local, single-user setups such as Codex, Claude Code or Cursor.
-  - `atlassian-mcp serve`: Streamable HTTP at `/mcp` (stateless, JSON responses), for a
-    shared or remote deployment.
-- **Jira**: issues, JQL search, projects, fields, agile boards and sprints, users,
-  worklogs, transitions, watchers, link types, changelogs, issue dates and SLA,
-  development info, Service Desk, ProForma forms, attachments and images.
-- **Confluence**: search (plain terms or CQL), pages, children, the space page tree,
-  comments, labels, user search, page history, diffs and views, attachments and images.
-- **Markdown output**: Jira ADF and Confluence storage XHTML are converted to Markdown.
-- **Paginated Confluence pages**: large page bodies come back in chunks, with
-  `content.pagination` and `content.next_call`, instead of being silently truncated.
-- **Attachments** are returned as MCP `EmbeddedResource` blobs and images as MCP
-  `ImageContent`. Size and count limits are configurable.
-- **HTTP mode extras**: token auth for `/mcp`, a Host allowlist, health endpoints and
-  Prometheus metrics.
-- **Read-only by construction**: the code has no write tools and calls no mutating
-  Atlassian endpoints.
+## Connect in 2 minutes
 
-## Installation
+### 1. Get the binary
 
-### Prebuilt binaries
-
-Download the archive for your platform from
-[Releases](https://github.com/rtmo0/mcp-atlassian/releases). Archives are published for
-Linux (x86_64, aarch64) and macOS (Apple Silicon, Intel). Unpack it and put
-`atlassian-mcp` somewhere on your `PATH`:
-
-```bash
-tar -xzf atlassian-mcp-v0.1.0-aarch64-apple-darwin.tar.gz
-install atlassian-mcp-v0.1.0-aarch64-apple-darwin/atlassian-mcp ~/.local/bin/
-```
-
-On macOS, a binary downloaded with a browser may be quarantined. Clear the flag with
-`xattr -d com.apple.quarantine ~/.local/bin/atlassian-mcp`.
-
-### From source
-
-You need a stable Rust toolchain (edition 2024) plus `cmake` and a C compiler for
-`aws-lc-rs`:
+Download an archive from [Releases](https://github.com/rtmo0/mcp-atlassian/releases)
+(Linux x86_64/aarch64, macOS Apple Silicon/Intel), or build it from source:
 
 ```bash
 cargo install --locked --git https://github.com/rtmo0/mcp-atlassian
-# or, from a checkout:
-cargo build --release --locked   # -> target/release/atlassian-mcp
 ```
 
-### Docker
+On macOS, a binary downloaded with a browser may be quarantined. Clear the flag with
+`xattr -d com.apple.quarantine /path/to/atlassian-mcp`.
+
+### 2. Create an Atlassian API token
+
+Create the token at <https://id.atlassian.com/manage-profile/security/api-tokens>. The
+server needs these variables:
 
 ```bash
-docker pull ghcr.io/rtmo0/mcp-atlassian:latest
+JIRA_URL=https://<site>.atlassian.net
+JIRA_USERNAME=you@example.com
+JIRA_API_TOKEN=<token>
+CONFLUENCE_URL=https://<site>.atlassian.net/wiki
+CONFLUENCE_USERNAME=you@example.com
+CONFLUENCE_API_TOKEN=<token>
 ```
 
-| Tag | Source |
-|---|---|
-| `latest`, `X.Y.Z`, `X.Y` | Release tags `vX.Y.Z` |
-| `edge` | `main` branch |
-| `sha-<short>` | Any build |
+You can configure only one product. The other product's tools then return a
+"not configured" error.
 
-Images are published for `linux/amd64` and `linux/arm64`. The default command is
-`serve`. Pass `stdio` to use the STDIO transport.
+### 3a. Connect over STDIO (local)
 
-## Atlassian credentials
-
-Both modes read Atlassian access from the same environment variables. Create an API
-token at <https://id.atlassian.com/manage-profile/security/api-tokens>.
-
-| Variable | Purpose |
-|---|---|
-| `JIRA_URL` | Jira base URL: `https://<site>.atlassian.net` or `https://api.atlassian.com/ex/jira/<cloud-id>` |
-| `JIRA_USERNAME` | Atlassian account email (Basic auth). Leave empty to send the token as a Bearer token |
-| `JIRA_API_TOKEN` | API token |
-| `CONFLUENCE_URL` | Confluence base URL: `https://<site>.atlassian.net/wiki` or `https://api.atlassian.com/ex/confluence/<cloud-id>` |
-| `CONFLUENCE_USERNAME` | Atlassian account email |
-| `CONFLUENCE_API_TOKEN` | API token |
-
-Configuring only one product is fine. The other product's tools stay in `tools/list` and
-return a clear "not configured" error when called.
-
-## STDIO mode
-
-```bash
-atlassian-mcp stdio
-```
-
-- The MCP client launches the process and talks JSON-RPC over stdin and stdout.
-- stdout carries only MCP messages. All logs go to stderr; set the level with `RUST_LOG`.
-- The process exits when the client closes stdin, or on SIGINT or SIGTERM.
-- HTTP-only settings are ignored: `ATLASSIAN_MCP_API_TOKEN`, `ATLASSIAN_MCP_REQUIRE_AUTH`,
-  ports, listen addresses and the Host allowlist. No network port is opened, including
-  the metrics port.
-
-### Codex
-
-`~/.codex/config.toml`:
+**Codex** (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.atlassian]
@@ -117,21 +54,15 @@ command = "/absolute/path/to/atlassian-mcp"
 args = ["stdio"]
 # Forward these variables from the environment Codex runs in:
 env_vars = [
-  "JIRA_URL",
-  "JIRA_USERNAME",
-  "JIRA_API_TOKEN",
-  "CONFLUENCE_URL",
-  "CONFLUENCE_USERNAME",
-  "CONFLUENCE_API_TOKEN",
-  "JIRA_PROJECTS_FILTER",
-  "CONFLUENCE_SPACES_FILTER",
+  "JIRA_URL", "JIRA_USERNAME", "JIRA_API_TOKEN",
+  "CONFLUENCE_URL", "CONFLUENCE_USERNAME", "CONFLUENCE_API_TOKEN",
+  "JIRA_PROJECTS_FILTER", "CONFLUENCE_SPACES_FILTER",
 ]
+# Or store the values in this file instead:
+# env = { JIRA_URL = "https://<site>.atlassian.net", JIRA_USERNAME = "...", JIRA_API_TOKEN = "..." }
 ```
 
-To store values in the config file instead, use
-`env = { JIRA_URL = "https://<site>.atlassian.net", ... }`.
-
-### Claude Code
+**Claude Code**:
 
 ```bash
 claude mcp add atlassian \
@@ -140,7 +71,7 @@ claude mcp add atlassian \
   -- /absolute/path/to/atlassian-mcp stdio
 ```
 
-### Other clients (JSON config)
+**Cursor, Claude Desktop and other JSON-configured clients**:
 
 ```json
 {
@@ -161,17 +92,66 @@ claude mcp add atlassian \
 }
 ```
 
-With Docker, run the image with `-i` (not `-t`) and pass the variables through:
+**STDIO through Docker** (run with `-i`, not `-t`):
 
 ```json
 {
   "command": "docker",
-  "args": ["run", "--rm", "-i", "-e", "JIRA_URL", "-e", "JIRA_USERNAME", "-e", "JIRA_API_TOKEN",
+  "args": ["run", "--rm", "-i",
+           "-e", "JIRA_URL", "-e", "JIRA_USERNAME", "-e", "JIRA_API_TOKEN",
+           "-e", "CONFLUENCE_URL", "-e", "CONFLUENCE_USERNAME", "-e", "CONFLUENCE_API_TOKEN",
            "ghcr.io/rtmo0/mcp-atlassian:latest", "stdio"]
 }
 ```
 
-### STDIO smoke test
+### 3b. Connect over HTTP (shared server)
+
+Start the server:
+
+```bash
+# Native
+ATLASSIAN_MCP_API_TOKEN=<mcp-token> \
+JIRA_URL=... JIRA_USERNAME=... JIRA_API_TOKEN=... \
+CONFLUENCE_URL=... CONFLUENCE_USERNAME=... CONFLUENCE_API_TOKEN=... \
+atlassian-mcp serve
+
+# Docker
+docker run --rm -p 8080:8080 \
+  -e ATLASSIAN_MCP_API_TOKEN=<mcp-token> \
+  -e JIRA_URL -e JIRA_USERNAME -e JIRA_API_TOKEN \
+  -e CONFLUENCE_URL -e CONFLUENCE_USERNAME -e CONFLUENCE_API_TOKEN \
+  ghcr.io/rtmo0/mcp-atlassian:latest
+```
+
+Then point the client at it:
+
+```json
+{
+  "mcpServers": {
+    "atlassian": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8080/mcp",
+      "headers": { "Authorization": "Bearer <mcp-token>" }
+    }
+  }
+}
+```
+
+For Codex:
+
+```toml
+[mcp_servers.atlassian]
+url = "http://127.0.0.1:8080/mcp"
+bearer_token_env_var = "ATLASSIAN_MCP_API_TOKEN"
+```
+
+When clients reach the server under a hostname other than localhost (a reverse proxy, a
+Kubernetes Service and so on), add that hostname to `ATLASSIAN_MCP_ALLOWED_HOSTS`.
+Requests with any other `Host` header are rejected.
+
+### 4. Smoke test
+
+STDIO:
 
 ```bash
 printf '%s\n' \
@@ -180,51 +160,10 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   | atlassian-mcp stdio 2>/dev/null \
   | jq -c 'select(.id == 2) | .result.tools | length'
-# -> 43
+# -> 43; the process exits when stdin closes
 ```
 
-The process exits when `printf` finishes and stdin closes. If stdout contains anything
-other than JSON-RPC lines, that is a bug.
-
-## HTTP mode
-
-```bash
-ATLASSIAN_MCP_API_TOKEN=devtoken \
-JIRA_URL=... JIRA_USERNAME=... JIRA_API_TOKEN=... \
-CONFLUENCE_URL=... CONFLUENCE_USERNAME=... CONFLUENCE_API_TOKEN=... \
-atlassian-mcp serve        # `serve` is also the default when no subcommand is given
-# MCP:     http://127.0.0.1:8080/mcp
-# Health:  http://127.0.0.1:8080/healthz, /readyz
-# Metrics: http://127.0.0.1:9090/metrics
-```
-
-With Docker:
-
-```bash
-docker run --rm -p 8080:8080 \
-  -e ATLASSIAN_MCP_API_TOKEN=devtoken \
-  -e JIRA_URL -e JIRA_USERNAME -e JIRA_API_TOKEN \
-  -e CONFLUENCE_URL -e CONFLUENCE_USERNAME -e CONFLUENCE_API_TOKEN \
-  ghcr.io/rtmo0/mcp-atlassian:latest
-```
-
-The image binds to `0.0.0.0`. The binary itself binds to `127.0.0.1` by default.
-
-Client configuration:
-
-```json
-{
-  "mcpServers": {
-    "atlassian": {
-      "type": "streamable-http",
-      "url": "http://127.0.0.1:8080/mcp",
-      "headers": { "Authorization": "Bearer <token>" }
-    }
-  }
-}
-```
-
-### HTTP smoke test
+HTTP:
 
 ```bash
 curl -sS http://127.0.0.1:8080/mcp \
@@ -233,24 +172,102 @@ curl -sS http://127.0.0.1:8080/mcp \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
   | jq '.result.tools | length'
+# -> 43
 ```
 
-### Endpoints
+## Architecture
 
-| Path | Auth | Purpose |
-|---|---|---|
-| `/mcp` | Token, if configured | MCP Streamable HTTP |
-| `/` | Public | Name, version, products and tool count |
-| `/healthz`, `/api/healthz` | Public | Liveness |
-| `/readyz`, `/api/readyz` | Public | `503` when no product is configured |
-| `:9090/metrics` | Public, separate port | Prometheus metrics |
+```mermaid
+flowchart LR
+    subgraph clients[MCP clients]
+        local["Codex / Claude Code / Cursor<br/>(same machine)"]
+        remote["Remote agents and IDEs"]
+    end
 
-Clients authenticate with `Authorization: Bearer <token>` or `X-Api-Key: <token>`.
+    subgraph bin[atlassian-mcp binary]
+        stdio["STDIO transport<br/>stdin/stdout, logs to stderr"]
+        http["HTTP transport (axum)<br/>/mcp + token auth + Host allowlist<br/>/healthz, /readyz"]
+        core["AtlassianMcpServer<br/>43 read-only tools<br/>concurrency limit, metrics"]
+        jira["JiraClient<br/>ADF → Markdown"]
+        conf["ConfluenceClient<br/>storage XHTML → Markdown<br/>chunked page bodies"]
+        meta[("Metadata cache<br/>TTL 5 min")]
+        pages[("Page cache<br/>keyed by page version")]
+        metrics["/metrics :9090<br/>(HTTP mode only)"]
+    end
 
-When the server is reachable under a hostname other than localhost, for example behind
-a reverse proxy or as a Kubernetes Service, add that hostname to
-`ATLASSIAN_MCP_ALLOWED_HOSTS`. Requests with other `Host` headers are rejected as DNS
-rebinding protection.
+    local -- "spawns: atlassian-mcp stdio<br/>JSON-RPC over pipes" --> stdio
+    remote -- "POST /mcp<br/>Bearer or X-Api-Key" --> http
+    stdio --> core
+    http --> core
+    http -.- metrics
+    core --> jira
+    core --> conf
+    jira <--> meta
+    conf <--> pages
+    jira -- "REST v3, Agile, dev-status" --> jc[(Jira Cloud)]
+    conf -- "REST v1" --> cc[(Confluence Cloud)]
+```
+
+- **One core, two transports.** Both transports serve the same `AtlassianMcpServer`
+  object. Tool registration and business logic exist only once. Each transport is a thin
+  adapter.
+- **STDIO mode** opens no network listeners. stdout carries only MCP JSON-RPC and every
+  log line goes to stderr. The process exits when the client closes stdin, or on SIGINT
+  or SIGTERM. HTTP-only settings (MCP token, ports, Host allowlist) are ignored.
+- **HTTP mode** is stateless Streamable HTTP with JSON responses, so any replica can
+  serve any request. Auth and Host checks run before a request reaches MCP. Metrics are
+  served on a separate internal port.
+- **Atlassian access** goes through one authenticated client per product, with retries
+  on 429 and 5xx (honoring `Retry-After`). A global semaphore caps the number of
+  concurrent tool calls.
+- **Caches** live in process memory only. Nothing is written to disk. See
+  [Caching](#caching).
+
+## Features
+
+- **Jira (29 tools)**: issues, JQL search, projects, fields, agile boards and sprints,
+  users, worklogs, transitions, watchers, link types, changelogs, issue dates and SLA,
+  development info, Service Desk, ProForma forms, attachments and images.
+- **Confluence (14 tools)**: search (plain terms or CQL), pages, children, the space
+  page tree, comments, labels, user search, page history, diffs and views, attachments
+  and images.
+- **Markdown output**: Jira ADF and Confluence storage XHTML are converted to Markdown.
+- **Paginated Confluence pages**: large bodies come back in chunks with a ready-made
+  `next_call` instead of being silently truncated.
+- **Attachments and images**: attachments are returned as MCP `EmbeddedResource` blobs
+  and images as `ImageContent`. Size and count limits apply.
+- **Read-only by construction**: there are no write tools and no calls to mutating
+  Atlassian endpoints.
+- **Upstream-compatible**: tool names, parameters and defaults match
+  [`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) 0.21.1
+  (revision `4e2b836`), and a test enforces it.
+
+## Caching
+
+The server caches only what it can serve without returning wrong answers:
+
+| Cache | What | Freshness | Default size |
+|---|---|---|---|
+| **Metadata** | Jira fields, field contexts and options, link types, project lists, versions and components, statuses, agile boards, user lookups | TTL (`ATLASSIAN_MCP_METADATA_CACHE_TTL_SECS`, default 300 s). `jira_search_fields` with `refresh=true` bypasses and refreshes the field list | 2,000 entries |
+| **Confluence pages** | Converted page bodies keyed by `(page_id, version, format)` | A page version never changes, so entries never go stale | `ATLASSIAN_MCP_PAGE_CACHE_MB`, default 64 MB, LRU, evicted after 30 min idle |
+
+How the page cache behaves:
+
+- **Historical versions** (`confluence_get_page_history`, `confluence_get_page_diff`)
+  are fetched once and then served from memory.
+- **Follow-up chunks of the current page** (`expected_version` set) send only a small
+  version probe (`expand=version`). If the page is still at the expected version, the
+  cached body is served without downloading and converting the page again. If the page
+  changed, the full page is fetched and the usual "page changed, restart with
+  `content_offset=0`" error is returned.
+
+Never cached: issues, comments, worklogs, transitions, sprints, search results, page
+trees and other live data.
+
+Set `ATLASSIAN_MCP_METADATA_CACHE_TTL_SECS=0` or `ATLASSIAN_MCP_PAGE_CACHE_MB=0` to turn a
+cache off. Every MCP client shares the caches, which is safe because every request uses
+the same Atlassian credentials. Hit and miss counts are exported as
+`atlassian_mcp_cache_lookups_total{cache,result}`.
 
 ## Configuration reference
 
@@ -258,8 +275,12 @@ rebinding protection.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `JIRA_URL`, `JIRA_USERNAME`, `JIRA_API_TOKEN` | — | Jira access (see above) |
-| `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN` | — | Confluence access (see above) |
+| `JIRA_URL` | — | `https://<site>.atlassian.net` or `https://api.atlassian.com/ex/jira/<cloud-id>` |
+| `JIRA_USERNAME` | — | Atlassian account email (Basic auth). Leave empty to send the token as a Bearer token |
+| `JIRA_API_TOKEN` | — | Jira API token |
+| `CONFLUENCE_URL` | — | `https://<site>.atlassian.net/wiki` or `https://api.atlassian.com/ex/confluence/<cloud-id>` |
+| `CONFLUENCE_USERNAME` | — | Atlassian account email |
+| `CONFLUENCE_API_TOKEN` | — | Confluence API token |
 | `JIRA_PROJECTS_FILTER` | — | Default comma-separated project keys for search and project lists. This is a convenience, not a security boundary |
 | `CONFLUENCE_SPACES_FILTER` | — | Default comma-separated space keys for search. This is a convenience, not a security boundary |
 | `READ_ONLY_MODE` | `true` | Accepted for upstream compatibility. Write tools are not implemented |
@@ -270,6 +291,8 @@ rebinding protection.
 | `ATLASSIAN_MCP_MAX_ATTACHMENT_BYTES` | `52428800` | Maximum bytes per inline attachment |
 | `ATLASSIAN_MCP_MAX_ATTACHMENTS_PER_CALL` | `20` | Maximum attachments per call |
 | `ATLASSIAN_MCP_MAX_TOTAL_ATTACHMENT_BYTES` | `104857600` | Maximum total attachment bytes per call |
+| `ATLASSIAN_MCP_METADATA_CACHE_TTL_SECS` | `300` | Jira metadata cache TTL. `0` disables it |
+| `ATLASSIAN_MCP_PAGE_CACHE_MB` | `64` | Confluence page cache budget. `0` disables it |
 | `ATLASSIAN_OAUTH_CLOUD_ID` | — | Cloud id, required by the ProForma Forms tools |
 | `JIRA_SLA_WORKING_HOURS_ONLY` | `false` | Default for `jira_get_issue_sla.working_hours_only` |
 | `JIRA_SLA_WORKING_HOURS_START`, `JIRA_SLA_WORKING_HOURS_END` | `09:00`, `17:00` | Working hours (UTC) for SLA calculations |
@@ -288,6 +311,18 @@ rebinding protection.
 | `ATLASSIAN_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Comma-separated `Host` allowlist |
 | `ATLASSIAN_MCP_METRICS_PORT` | `9090` | Port for `/metrics`. `0` disables it |
 | `ATLASSIAN_MCP_METRICS_LISTEN` | `127.0.0.1` (`0.0.0.0` in Docker) | Metrics listen address |
+
+### HTTP endpoints
+
+| Path | Auth | Purpose |
+|---|---|---|
+| `/mcp` | Token, if configured | MCP Streamable HTTP |
+| `/` | Public | Name, version, products and tool count |
+| `/healthz`, `/api/healthz` | Public | Liveness |
+| `/readyz`, `/api/readyz` | Public | `503` when no product is configured |
+| `:9090/metrics` | Public, separate port | Prometheus metrics |
+
+Clients authenticate with `Authorization: Bearer <token>` or `X-Api-Key: <token>`.
 
 ## Tools
 
@@ -394,13 +429,29 @@ Rules for reading chunks:
   `updateHistory=true`, so it does not modify the user's view history.
 - Secrets are read only from environment variables. They are never logged or included in
   error messages.
-- Attachments are base64-encoded in memory within the configured limits. No temporary
-  files are written, so the container can run with a read-only root filesystem.
+- Attachments and cached data are held in memory only. No temporary files are written,
+  so the container can run with a read-only root filesystem.
 - `JIRA_PROJECTS_FILTER` and `CONFLUENCE_SPACES_FILTER` are not access controls. Limit
   access through the Atlassian account's permissions.
 - An API token may lack scopes for Jira Agile, Confluence user search, dev-status or
   ProForma. Those tools return the upstream-style error and every other tool keeps
   working.
+
+## Installation options
+
+| Method | Command |
+|---|---|
+| Release binary | Download from [Releases](https://github.com/rtmo0/mcp-atlassian/releases). The `.sha256` files hold checksums |
+| Cargo | `cargo install --locked --git https://github.com/rtmo0/mcp-atlassian` |
+| From a checkout | `cargo build --release --locked` produces `target/release/atlassian-mcp` |
+| Docker | `docker pull ghcr.io/rtmo0/mcp-atlassian:latest` (`linux/amd64`, `linux/arm64`) |
+
+Building from source needs a stable Rust toolchain (edition 2024) plus `cmake` and a C
+compiler for `aws-lc-rs`.
+
+Docker tags: `latest`, `X.Y.Z` and `X.Y` come from release tags `vX.Y.Z`; `edge` tracks
+`main`; `sha-<short>` is published for every build. The image runs `serve` by default.
+Pass `stdio` as the command to use the STDIO transport.
 
 ## Development
 

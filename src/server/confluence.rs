@@ -38,7 +38,11 @@ impl AtlassianMcpServer {
         self.run_confluence_json("confluence_get_page", |confluence| async move {
             let mut page = if let Some(page_id) = params.page_id.as_deref() {
                 confluence
-                    .get_page(page_id, params.convert_to_markdown)
+                    .get_page(
+                        page_id,
+                        params.convert_to_markdown,
+                        params.expected_version,
+                    )
                     .await?
             } else if let (Some(title), Some(space_key)) =
                 (params.title.as_deref(), params.space_key.as_deref())

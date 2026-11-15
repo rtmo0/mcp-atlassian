@@ -9,7 +9,10 @@ impl JiraClient {
         if include_archived {
             query.push(("includeArchived", "true".to_string()));
         }
-        let projects = self.client.get_json("rest/api/3/project", &query).await?;
+        let projects = self
+            .client
+            .get_json_cached("rest/api/3/project", &query)
+            .await?;
         let mut projects = projects.as_array().cloned().unwrap_or_default();
         for project in &mut projects {
             if let Some(key) = project.get_mut("key")
@@ -38,7 +41,7 @@ impl JiraClient {
         self.ensure_project_allowed(project_key)?;
         let versions = self
             .client
-            .get_json(&format!("rest/api/3/project/{project_key}/versions"), &[])
+            .get_json_cached(&format!("rest/api/3/project/{project_key}/versions"), &[])
             .await?;
         let versions = versions
             .as_array()
@@ -101,7 +104,7 @@ impl JiraClient {
     pub async fn get_project_components(&self, project_key: &str) -> anyhow::Result<Value> {
         self.ensure_project_allowed(project_key)?;
         self.client
-            .get_json(&format!("rest/api/3/project/{project_key}/components"), &[])
+            .get_json_cached(&format!("rest/api/3/project/{project_key}/components"), &[])
             .await
     }
 }

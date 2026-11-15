@@ -107,9 +107,8 @@ pub struct JiraSearchFieldsParams {
     #[serde(default = "default_10")]
     #[schemars(default = "default_10", range(min = 1))]
     pub limit: u32,
-    /// Force refresh of the field list (the server does not cache).
+    /// Whether to force refresh the field list
     #[serde(default)]
-    #[allow(dead_code)]
     pub refresh: bool,
 }
 

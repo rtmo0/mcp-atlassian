@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod cache;
 mod config;
 mod markdown;
 mod metrics;

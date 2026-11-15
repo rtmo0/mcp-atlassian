@@ -15,7 +15,7 @@ impl JiraClient {
                 self.resolve_account_id(identifier).await?
             };
             self.client
-                .get_json("rest/api/3/user", &[("accountId", account_id)])
+                .get_json_cached("rest/api/3/user", &[("accountId", account_id)])
                 .await?
         };
         Ok(json!({
@@ -27,7 +27,7 @@ impl JiraClient {
     async fn resolve_account_id(&self, identifier: &str) -> anyhow::Result<String> {
         let response = self
             .client
-            .get_json(
+            .get_json_cached(
                 "rest/api/3/user/search",
                 &[
                     ("query", identifier.to_string()),

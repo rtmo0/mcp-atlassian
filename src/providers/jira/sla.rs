@@ -237,7 +237,10 @@ impl JiraClient {
     }
 
     async fn status_categories(&self) -> anyhow::Result<HashMap<String, String>> {
-        let response = self.client.get_json("rest/api/3/status", &[]).await?;
+        let response = self
+            .client
+            .get_json_cached("rest/api/3/status", &[])
+            .await?;
         let mut map = HashMap::new();
         if let Some(statuses) = response.as_array() {
             for status in statuses {

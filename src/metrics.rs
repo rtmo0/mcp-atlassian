@@ -65,6 +65,7 @@ impl Metrics {
             &["tool"],
         )?;
         registry.register(Box::new(in_flight.clone()))?;
+        registry.register(Box::new(crate::cache::CACHE_LOOKUPS.clone()))?;
 
         Ok(Self {
             registry,

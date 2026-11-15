@@ -15,6 +15,7 @@ use crate::providers::AtlassianClient;
 pub struct ConfluenceClient {
     pub(crate) client: AtlassianClient,
     pub(crate) spaces_filter: Vec<String>,
+    pub(crate) page_cache: Option<crate::cache::PageCache>,
 }
 
 impl ConfluenceClient {
@@ -27,7 +28,13 @@ impl ConfluenceClient {
         Self {
             client: AtlassianClient::new(cfg, Product::Confluence, http, retry_max),
             spaces_filter,
+            page_cache: None,
         }
+    }
+
+    pub fn with_page_cache(mut self, cache: Option<crate::cache::PageCache>) -> Self {
+        self.page_cache = cache;
+        self
     }
 
     pub fn base_url(&self) -> &str {
