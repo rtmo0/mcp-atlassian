@@ -1,6 +1,9 @@
 # atlassian-mcp
 
+[![Support on Boosty](https://img.shields.io/badge/Boosty-support-F15F2C?logo=boosty&logoColor=white)](https://boosty.to/rtm00)
 [![CI](https://github.com/rtmo0/mcp-atlassian/actions/workflows/ci.yml/badge.svg)](https://github.com/rtmo0/mcp-atlassian/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/rtmo0/mcp-atlassian)](https://github.com/rtmo0/mcp-atlassian/releases/latest)
+![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
 Read-only [MCP](https://modelcontextprotocol.io) server for **Atlassian Cloud** (Jira and
 Confluence). It is a single Rust binary with **two transports**:
@@ -483,6 +486,10 @@ To cut a release, bump `version` in `Cargo.toml`, commit, then:
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+## Support
+
+atlassian-mcp is free and open source. If it saves you time, you can support development on [Boosty](https://boosty.to/rtm00). Bug reports and pull requests help a lot too.
 
 ## License
 
